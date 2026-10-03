@@ -1,0 +1,86 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    DFAudioStudio 界面层：WinUI 3 / Windows App SDK 1.8 桌面应用（非打包 unpackaged）。
+    · WindowsPackageType=None → 生成可直接双击的 exe；运行时需要本机已安装 Windows App Runtime 1.8。
+    · 若 NuGet 上找不到 Microsoft.WindowsAppSDK 1.8.250907003，把版本改成 1.8.* 即可。
+    · x64 only：WindowsAppSDK 的原生依赖需要明确的平台，因此 PlatformTarget / Platform 都锁定 x64。
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <RootNamespace>DFAudioStudio.App</RootNamespace>
+    <AssemblyName>DFAudioStudio.App</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- 应用图标（exe 内嵌；同时作为 Assets\app.ico 复制到输出目录，供运行时设置窗口/任务栏图标） -->
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <Platform Condition="'$(Platform)' == '' or '$(Platform)' == 'AnyCPU'">x64</Platform>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <UseWinUI>true</UseWinUI>
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <!-- 自包含模式：运行时随程序一起发布，因此必须关闭 Bootstrapper 自动初始化（否则会去找系统框架包并失败 0x80670016） -->
+    <WindowsAppSdkBootstrapInitialize>false</WindowsAppSdkBootstrapInitialize>
+    <EnableMsixTooling>false</EnableMsixTooling>
+    <SelfContained>false</SelfContained>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <EnableDefaultPageItems>true</EnableDefaultPageItems>
+    <EnableDefaultApplicationDefinition>true</EnableDefaultApplicationDefinition>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <SatelliteResourceLanguages>zh-Hans;en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <!-- ================= Alpha 定时过期版（独立发布的版本） =================
+       编译 / 发布（自包含 win-x64，直接双击可运行）：
+         dotnet publish -c Alpha src/DFAudioStudio.App/DFAudioStudio.App.csproj -r win-x64 -p:SelfContained=true
+       该配置定义 ALPHA_EXPIRY，启用 Services/TimeGuard.cs：启动时向公网 NTP 服务器取时，
+       系统时间与 NTP 不一致 / 网络时间已过 2026-09-24 00:00（北京时间）/ 无法完成校时
+       一律只显示统一提示并退出。Release 正式版不含这些代码，行为与原先一致。 -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Alpha'">
+    <DefineConstants>$(DefineConstants);ALPHA_EXPIRY</DefineConstants>
+    <Version>1.0.0-alpha.20260924</Version>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+    <InformationalVersion>1.0.0-alpha-expire-20260924</InformationalVersion>
+    <Product>三角洲音频工坊 Alpha测试版</Product>
+    <AssemblyTitle>三角洲音频工坊 Alpha测试版（2026-09-24 过期）</AssemblyTitle>
+    <Company>河豚潘PufferPan</Company>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.250907003" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.*" />
+    <PackageReference Include="NAudio" Version="2.2.1" />
+    <PackageReference Include="SoundTouch.Net" Version="2.3.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DFAudioStudio.Core\DFAudioStudio.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 先 Remove 再 Include，避免与 SDK 默认 None 通配项冲突（NETSDK1022 重复项）。 -->
+    <None Remove="app.manifest" />
+    <None Include="app.manifest" />
+    <Content Include="Assets\app.ico" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!--
+    WinUI 3 的 dotnet publish 不会自动把 XAML 编译产物（*.xbf 与 应用名.pri）带进 publish 目录，
+    少了它们运行时会报 "Cannot locate resource from 'ms-appx:///MainWindow.xaml'"，
+    所以发布完成后直接从输出目录拷过去（Alpha 安装包必须包含这两个文件）。
+  -->
+  <Target Name="CopyXamlResourcesAfterPublish" AfterTargets="Publish">
+    <ItemGroup>
+      <_XamlResources Include="$(OutDir)*.xbf" />
+      <_XamlResources Include="$(OutDir)$(TargetName).pri" Condition="Exists('$(OutDir)$(TargetName).pri')" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_XamlResources)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>

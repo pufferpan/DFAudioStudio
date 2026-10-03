@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Page
+    x:Class="DFAudioStudio.App.Pages.BrowserPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:controls="using:DFAudioStudio.App.Controls"
+    Background="Transparent"
+    mc:Ignorable="d">
+
+    <!--
+        唯一的浏览页：左边分区导航树点哪个叶子，就把那个 BrowserScope 作为导航参数传进来。
+        标题与一行状态由页面负责（PageTitle + Secondary），其余全部交给 AudioBrowserControl。
+    -->
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Grid Grid.Row="0" MaxWidth="880" HorizontalAlignment="Center" Margin="56,48,56,32">
+            <StackPanel Spacing="12">
+                <TextBlock Text="{x:Bind Browser.ViewModel.Title, Mode=OneWay}"
+                           Style="{StaticResource ApplePageTitleStyle}"
+                           TextTrimming="CharacterEllipsis"
+                           MaxLines="1" />
+
+                <TextBlock Style="{StaticResource AppleSecondaryStyle}"
+                           MaxLines="1" TextTrimming="CharacterEllipsis">
+                    <Run Text="{x:Bind Browser.ViewModel.TotalCountText, Mode=OneWay}" />
+                    <Run Text="条 · " />
+                    <Run Text="{x:Bind Browser.ViewModel.Subtitle, Mode=OneWay}" />
+                </TextBlock>
+            </StackPanel>
+        </Grid>
+
+        <controls:AudioBrowserControl x:Name="Browser" Grid.Row="1" />
+    </Grid>
+</Page>

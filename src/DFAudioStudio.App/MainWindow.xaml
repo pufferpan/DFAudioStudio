@@ -1,0 +1,488 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="DFAudioStudio.App.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    Title="三角洲音频工坊">
+
+    <!--
+        极简导航壳：根 Grid 铺「三色来回渐变」动画背景，Pane 半透明（浅色 #CCFFFFFF / 深色 #CC1C1C1E）、
+        内容区透明（渐变透出来），只有「一行应用名 + 一行刷新链接」，其余全是文字
+        （分组标题与分区叶子一律纯文字，只有概览 / 队列 / 设置各留一个 16px 线性 FontIcon）。
+
+        侧栏：PaneDisplayMode="LeftCompact" + CompactPaneLength="48"（折叠后是一条 48px 图标栏，
+        不会整个消失，切换按钮因此不会压住内容）；展开时 OpenPaneLength="248"。
+        PaneHeader 按 Nav.IsPaneOpen 在「展开态（应用名 + 刷新分区 + 状态行）」与「紧凑态（DF 字标）」
+        两个容器之间切换 —— 折叠后不会再按 248 宽排版。
+
+        主题：颜色一律 {ThemeResource ...}（令牌在 Styles/AppleTheme.xaml 的 Light / Dark 主题字典里）。
+        切换时先让 ThemeOverlay（铺满窗口、IsHitTestVisible=False）淡到目标主题底色，再改
+        RootGrid.RequestedTheme，然后淡出（动画在 MainWindow.xaml.cs）。
+
+        启动片头：最上层还有一个 SplashOverlay（黑底 + MediaPlayerElement + 右下角「跳过」），
+        是否播放由设置 AppSettings.PlaySplashOnStartup / SplashVideoPath 决定；
+        播放与收尾（含 30 秒兜底）全部在 MainWindow.xaml.cs 里（Window 根上不能用 x:Bind 到元素属性）。
+    -->
+    <Grid x:Name="RootGrid" Loaded="RootGrid_Loaded">
+
+        <!-- 背景动画定义（属性元素必须写在子元素之前） -->
+        <Grid.Resources>
+            <Storyboard x:Name="BgStoryboard" RepeatBehavior="Forever">
+                <DoubleAnimationUsingKeyFrames Storyboard.TargetName="BgLayerA" Storyboard.TargetProperty="Opacity" Duration="0:0:18">
+                    <DiscreteDoubleKeyFrame KeyTime="0:0:0" Value="1" />
+                    <LinearDoubleKeyFrame KeyTime="0:0:6" Value="0" />
+                    <LinearDoubleKeyFrame KeyTime="0:0:12" Value="0" />
+                    <LinearDoubleKeyFrame KeyTime="0:0:18" Value="1" />
+                </DoubleAnimationUsingKeyFrames>
+                <DoubleAnimationUsingKeyFrames Storyboard.TargetName="BgLayerB" Storyboard.TargetProperty="Opacity" Duration="0:0:18">
+                    <DiscreteDoubleKeyFrame KeyTime="0:0:0" Value="0" />
+                    <LinearDoubleKeyFrame KeyTime="0:0:6" Value="1" />
+                    <LinearDoubleKeyFrame KeyTime="0:0:12" Value="0" />
+                    <LinearDoubleKeyFrame KeyTime="0:0:18" Value="0" />
+                </DoubleAnimationUsingKeyFrames>
+                <DoubleAnimationUsingKeyFrames Storyboard.TargetName="BgLayerC" Storyboard.TargetProperty="Opacity" Duration="0:0:18">
+                    <DiscreteDoubleKeyFrame KeyTime="0:0:0" Value="0" />
+                    <LinearDoubleKeyFrame KeyTime="0:0:6" Value="0" />
+                    <LinearDoubleKeyFrame KeyTime="0:0:12" Value="1" />
+                    <LinearDoubleKeyFrame KeyTime="0:0:18" Value="0" />
+                </DoubleAnimationUsingKeyFrames>
+            </Storyboard>
+        </Grid.Resources>
+
+        <!--
+            三色来回渐变背景：用三层各自带渐变的 Grid 做透明度交叉淡入淡出（0→6→12→18s 循环）。
+            不用 Storyboard 动画 GradientStop.Color —— WinUI 里解析不到 GradientStop 的 TargetName，
+            动画会静默失效（实测背景色恒定不变）；而 Opacity 动画是核心能力，必定生效。
+            渐变色本身按主题走：BgLayerA / BgLayerC 是在 Light / Dark 主题字典里各给一套的 LinearGradientBrush
+            （深色是暗蓝 / 暗紫 / 暗薄荷，不再有白色渐变），所以这里必须用 ThemeResource。
+        -->
+        <Grid x:Name="BgLayerA" Opacity="1" Background="{ThemeResource BgLayerA}" />
+
+        <Grid x:Name="BgLayerB" Opacity="0" Background="{ThemeResource BgLayerB}" />
+
+        <Grid x:Name="BgLayerC" Opacity="0" Background="{ThemeResource BgLayerC}" />
+
+        <!--
+            音乐频谱层：播放音频时随频谱跳动；没有播放时整体淡出，只留上面的三色渐变。
+            · BgSpectrumPulse：全窗脉冲罩，跟着整体能量轻微呼吸（体现"背景在动"）
+            · BgSpectrumBars：底部一排柱子，高度 = 各频段能量（柱子在代码里生成，见 InitSpectrumVisual）
+            颜色在代码里按当前主题取，主题切换时刷新。
+        -->
+        <Grid x:Name="BgSpectrumLayer" Opacity="0" IsHitTestVisible="False">
+            <Grid x:Name="BgSpectrumPulse" Opacity="0" />
+            <Grid x:Name="BgSpectrumBars" VerticalAlignment="Bottom" Height="220" />
+        </Grid>
+
+        <NavigationView
+            x:Name="Nav"
+            PaneDisplayMode="LeftCompact"
+            OpenPaneLength="248"
+            CompactPaneLength="48"
+            IsBackButtonVisible="Collapsed"
+            IsSettingsVisible="False"
+            IsPaneToggleButtonVisible="True"
+            AlwaysShowHeader="False"
+            SelectionChanged="Nav_SelectionChanged">
+
+            <!-- 折叠自适应的标题区：展开态 / 紧凑态两个容器，靠 IsPaneOpen 切换可见性 -->
+            <NavigationView.PaneHeader>
+                <Grid>
+
+                    <!-- ── 展开态（248 宽）：应用名 + 右侧「刷新分区」文字链接 + 一行状态 ── -->
+                    <Grid x:Name="PaneHeaderExpanded" Margin="0,8,4,18">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <!-- 只留一行应用名 -->
+                        <TextBlock Grid.Row="0" Grid.Column="0"
+                                   Text="三角洲音频工坊"
+                                   Style="{StaticResource AppleCardTitleStyle}"
+                                   VerticalAlignment="Center"
+                                   TextTrimming="CharacterEllipsis" />
+
+                        <!-- 刷新分区：降级为文字链接 + 官方矢量图标，放在应用名右侧 -->
+                        <Button AutomationProperties.Name="刷新分区" x:Name="RefreshTreeButton"
+                                Grid.Row="0" Grid.Column="1"
+                                Style="{StaticResource AppleTextLinkButtonStyle}"
+                                VerticalAlignment="Center"
+                                Click="RefreshTree_Click">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <FontIcon Glyph="&#xE72C;" FontSize="15"
+                                          FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                          Foreground="{ThemeResource Accent}" VerticalAlignment="Center" />
+                                <TextBlock Text="刷新分区"
+                                           Foreground="{ThemeResource Accent}" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
+
+                        <TextBlock x:Name="TreeStatusText"
+                                   Grid.Row="1" Grid.ColumnSpan="2"
+                                   Margin="0,6,0,0"
+                                   Text="正在按索引库生成分区导航…"
+                                   Style="{StaticResource AppleCaptionStyle}"
+                                   TextTrimming="CharacterEllipsis"
+                                   MaxLines="1" />
+                    </Grid>
+
+                    <!-- ── 紧凑态（48 宽）：只有一个 20px 的 DF 字标，不要状态文本、不要链接 ── -->
+                    <Grid x:Name="PaneHeaderCompact" Height="48" Margin="0,2,0,6">
+                        <TextBlock Text="DF"
+                                   FontSize="20"
+                                   FontWeight="SemiBold"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   Foreground="{ThemeResource TextPrimary}" />
+                    </Grid>
+                </Grid>
+            </NavigationView.PaneHeader>
+
+            <NavigationView.MenuItems>
+                <NavigationViewItem x:Name="NavItemDashboard" Content="概览" Tag="dashboard">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE80F;" FontSize="16"
+                                  FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+
+                <!--
+                    分区导航：子菜单在代码里按索引库真实数据生成（Task.Run 查库 + UI 线程填 MenuItems）。
+                    必须带 Icon —— 紧凑态（48px）只显示图标，没有图标这一项在折叠后会变成空白条。
+                -->
+                <NavigationViewItem x:Name="PartitionRoot" Tag="partitions" IsExpanded="True" Margin="0,10,0,0">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE8B7;" FontSize="16"
+                                  FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" />
+                    </NavigationViewItem.Icon>
+                    <NavigationViewItem.Content>
+                        <Grid VerticalAlignment="Center">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <!-- 折叠态由 UpdatePaneAdaptiveVisuals() 把这段文字 Collapsed：
+                                 WinUI 只自动隐藏「字符串内容」的标签，自定义 Content 不会，
+                                 不隐藏就会被 48px 图标栏裁成一条（显示不全）。 -->
+                            <TextBlock x:Name="PartitionRootLabel" Grid.Column="0" Text="分区导航" VerticalAlignment="Center" />
+                            <!-- 折叠态下必须在 48px 里保持折叠（避免挤爆）；可见性由 SetTreeBusy + IsPaneOpen 共同决定 -->
+                            <ProgressRing x:Name="TreeRing" Grid.Column="1"
+                                          Width="12" Height="12"
+                                          VerticalAlignment="Center" Margin="8,0,0,0"
+                                          IsActive="False" Visibility="Collapsed" />
+                        </Grid>
+                    </NavigationViewItem.Content>
+                </NavigationViewItem>
+            </NavigationView.MenuItems>
+
+            <!-- 侧栏底部：主题开关（展开态 ToggleSwitch / 紧凑态 36×36 图标按钮） -->
+            <NavigationView.PaneFooter>
+                <Grid Margin="0,8,0,10">
+
+                    <!-- 展开态：太阳（E706 = 浅色）/ 月亮（E708 = 深色） -->
+                    <ToggleSwitch x:Name="ThemeToggle"
+                                  AutomationProperties.Name="暗色模式"
+                                  Margin="4,0,4,0"
+                                  HorizontalAlignment="Stretch"
+                                  Toggled="ThemeToggle_Toggled">
+                        <ToggleSwitch.OnContent>
+                            <FontIcon Glyph="&#xE708;" FontSize="16"
+                                      FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" />
+                        </ToggleSwitch.OnContent>
+                        <ToggleSwitch.OffContent>
+                            <FontIcon Glyph="&#xE706;" FontSize="16"
+                                      FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" />
+                        </ToggleSwitch.OffContent>
+                    </ToggleSwitch>
+
+                    <!-- 紧凑态（48px）：同一个入口的图标按钮，宽度 36 + 左边距 6 = 42 ≤ 48，不会溢出 -->
+                    <Button x:Name="ThemeCompactButton"
+                            AutomationProperties.Name="暗色模式"
+                            Style="{StaticResource ApplePaneIconButtonStyle}"
+                            HorizontalAlignment="Left" VerticalAlignment="Center"
+                            Margin="6,0,0,0"
+                            ToolTipService.ToolTip="切换浅色 / 深色"
+                            Click="ThemeCompact_Click">
+                        <FontIcon x:Name="ThemeCompactIcon" Glyph="&#xE706;" FontSize="16"
+                                  FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                  Foreground="{ThemeResource TextPrimary}" />
+                    </Button>
+                </Grid>
+            </NavigationView.PaneFooter>
+
+            <!-- 底部固定入口：识别队列（手动开始 / 暂停 / 停止）+ 新手教程 + 设置 -->
+            <NavigationView.FooterMenuItems>
+                <NavigationViewItem x:Name="NavItemQueue" Content="识别队列" Tag="queue">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE9D9;" FontSize="16"
+                                  FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem x:Name="NavItemTutorial" Content="新手教程" Tag="tutorial">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE7BE;" FontSize="16"
+                                  FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem x:Name="NavItemSettings" Content="设置" Tag="settings">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE713;" FontSize="16"
+                                  FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+            </NavigationView.FooterMenuItems>
+
+            <Frame x:Name="ContentFrame" Background="Transparent" />
+        </NavigationView>
+
+        <!--
+            主题切换覆盖层：铺满窗口、不吃点击、颜色由代码按「目标主题」的页面底色临时设置。
+            切换流程 = 淡入到目标底色（180ms）→ 改 RootGrid.RequestedTheme → 淡出（220ms）。
+            Canvas.ZIndex 抬到最上层（放在 NavigationView 之后本来就在最上面，这里只是显式声明）。
+        -->
+        <Border x:Name="ThemeOverlay"
+                Canvas.ZIndex="99"
+                IsHitTestVisible="False"
+                Opacity="0"
+                Visibility="Collapsed"
+                Background="{ThemeResource PageBackground}" />
+
+        <!--
+            启动片头覆盖层：铺满窗口、最上层（Canvas.ZIndex=100 > ThemeOverlay 的 99）。
+            · 黑底是刻意写死的 #000000（全应用唯一的画面级例外）：视频本身带黑边，用主题底色反而会露边。
+            · MediaPlayerElement 只负责画面，事件在 code-behind 里挂（MediaOpened / MediaEnded / MediaFailed）；
+              可见性也一律由 code-behind 赋值 —— WinUI 在 Window 根上不支持 x:Bind 到元素属性（CS1503）。
+            · AutoPlay="True" 是要求；代码里自建 MediaPlayer 也设了 AutoPlay=true，
+              并且在 MediaOpened 里再兜一次 Play()（**不**在设完 Source 之后立刻 Play：Source 还没 open 时会被忽略）。
+        -->
+        <Grid x:Name="SplashOverlay"
+              Canvas.ZIndex="100"
+              Visibility="Collapsed"
+              Background="#000000">
+
+            <MediaPlayerElement x:Name="SplashPlayer"
+                                AreTransportControlsEnabled="False"
+                                AutoPlay="True"
+                                Stretch="Uniform" />
+
+            <!-- 右下角「跳过」：文字链接样式 + 白色文字（黑底上唯一可读的颜色，两套主题都用 OnAccent=白） -->
+            <Button x:Name="SplashSkipButton"
+                    AutomationProperties.Name="跳过片头"
+                    Style="{StaticResource AppleTextLinkButtonStyle}"
+                    HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                    Margin="0,0,32,28"
+                    Click="SplashSkip_Click">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <FontIcon Glyph="&#xE893;" FontSize="15"
+                              FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                              Foreground="{ThemeResource OnAccent}" VerticalAlignment="Center" />
+                    <TextBlock Text="跳过"
+                               Foreground="{ThemeResource OnAccent}" VerticalAlignment="Center" />
+                </StackPanel>
+            </Button>
+        </Grid>
+
+        <!--
+            ┌──────────────────────────────────────────────────────────────────────────┐
+            │ 首次使用引导：第一次打开软件时**铺满整个窗口**，教用户设置音频目录 / 模型。│
+            │ · 只在 AppSettings.OnboardingCompleted == false 时自动出现；             │
+            │   走完（或点「跳过引导」）就写 true，之后不再自动弹。                      │
+            │ · 每一步的文字用「指数缓动 EaseOut」从下往上升（非线性：快进慢停），        │
+            │   同一步内多条文字错峰 70ms，动画见 EnsureOnboardingStep / AnimateStepIn。 │
+            │ · 整层不吃导航：盖住左侧导航栏与内容区（ZIndex=110 > 片头的 100）。        │
+            └──────────────────────────────────────────────────────────────────────────┘
+        -->
+        <Grid x:Name="OnboardingLayer"
+              Canvas.ZIndex="110"
+              Visibility="Collapsed"
+              Background="{ThemeResource PageBackground}">
+
+            <Grid MaxWidth="820" Margin="40,32" HorizontalAlignment="Center" VerticalAlignment="Center"
+                  RowSpacing="20">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <!-- 顶部：进度点 + 步骤提示 -->
+                <StackPanel x:Name="OnboardingHeader" Grid.Row="0" Spacing="10">
+                    <TextBlock Text="欢迎使用 三角洲音频工坊" Style="{StaticResource ApplePageTitleStyle}" />
+                    <TextBlock x:Name="OnboardingStepLabel" Text="第 1 / 4 步"
+                               Style="{StaticResource AppleSecondaryStyle}" />
+                    <StackPanel x:Name="OnboardingDots" Orientation="Horizontal" Spacing="8" />
+                </StackPanel>
+
+                <!-- 中部：各步骤内容（一次只显示一步） -->
+                <Border Grid.Row="1" Style="{StaticResource AppleCardBorderStyle}" VerticalAlignment="Stretch">
+                    <Grid>
+                        <!-- ① 这是什么 -->
+                        <StackPanel x:Name="OnboardingStep1" Spacing="14">
+                            <TextBlock Text="这个软件做什么" Style="{StaticResource AppleCardTitleStyle}" />
+                            <TextBlock Style="{StaticResource AppleBodyStyle}" TextWrapping="Wrap"
+                                       Text="把三角洲行动（Delta Force）导出的 Wwise 音频（.wav）全量扫进一个本地索引库，然后按 类型 / 场景 / 干员 / 活动 / 地图 等维度归类浏览；再用本地 Whisper 模型把语音转成文字，方便按台词搜索。" />
+                            <TextBlock Style="{StaticResource AppleBodyStyle}" TextWrapping="Wrap"
+                                       Text="全程离线：音频不出本机，模型只在本地跑。第一次用只需要三步——告诉它音频在哪、准备好识别模型、开始扫描索引。" />
+                            <TextBlock Style="{StaticResource AppleCaptionStyle}" TextWrapping="Wrap"
+                                       Text="这个引导以后还可以从左侧「新手教程」页重看；设置页里所有改动都是自动保存的。" />
+                        </StackPanel>
+
+                        <!-- ② 音频目录 -->
+                        <StackPanel x:Name="OnboardingStep2" Spacing="14" Visibility="Collapsed">
+                            <TextBlock Text="第一步：告诉它音频在哪" Style="{StaticResource AppleCardTitleStyle}" />
+
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="Media 目录（WwiseAudio\Media）" Style="{StaticResource AppleCaptionStyle}" />
+                                <Grid ColumnSpacing="12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox x:Name="ObMediaBox" Grid.Column="0" Height="36" VerticalAlignment="Center"
+                                             Style="{StaticResource AppleSubtleTextBoxStyle}"
+                                             AutomationProperties.Name="引导 Media 目录"
+                                             PlaceholderText="选到 WwiseAudio\Media 这一层" />
+                                    <Button Grid.Column="1" AutomationProperties.Name="引导浏览 Media"
+                                            Style="{StaticResource AppleSecondaryButtonStyle}"
+                                            VerticalAlignment="Center" Click="ObPickMedia_Click">
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <FontIcon Glyph="&#xE8B7;" FontSize="15"
+                                                      FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                      Foreground="{ThemeResource TextPrimary}" VerticalAlignment="Center" />
+                                            <TextBlock Text="浏览" Foreground="{ThemeResource TextPrimary}" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                    </Button>
+                                </Grid>
+                            </StackPanel>
+
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="Localized 目录（WwiseAudio\Localized，可留空）" Style="{StaticResource AppleCaptionStyle}" />
+                                <Grid ColumnSpacing="12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox x:Name="ObLocalizedBox" Grid.Column="0" Height="36" VerticalAlignment="Center"
+                                             Style="{StaticResource AppleSubtleTextBoxStyle}"
+                                             AutomationProperties.Name="引导 Localized 目录"
+                                             PlaceholderText="选到 WwiseAudio\Localized 这一层" />
+                                    <Button Grid.Column="1" AutomationProperties.Name="引导浏览 Localized"
+                                            Style="{StaticResource AppleSecondaryButtonStyle}"
+                                            VerticalAlignment="Center" Click="ObPickLocalized_Click">
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <FontIcon Glyph="&#xE8B7;" FontSize="15"
+                                                      FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                      Foreground="{ThemeResource TextPrimary}" VerticalAlignment="Center" />
+                                            <TextBlock Text="浏览" Foreground="{ThemeResource TextPrimary}" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                    </Button>
+                                </Grid>
+                            </StackPanel>
+
+                            <TextBlock x:Name="ObPathHint" Style="{StaticResource AppleCaptionStyle}" TextWrapping="Wrap"
+                                       Foreground="{ThemeResource Accent}" />
+                            <TextBlock Style="{StaticResource AppleCaptionStyle}" TextWrapping="Wrap"
+                                       Text="选完立即生效、自动保存；目录里的音频越多，第一次建索引越久（只认 .wav，未改动的文件会跳过）。" />
+                        </StackPanel>
+
+                        <!-- ③ 模型 -->
+                        <StackPanel x:Name="OnboardingStep3" Spacing="14" Visibility="Collapsed">
+                            <TextBlock Text="第二步：准备识别模型" Style="{StaticResource AppleCardTitleStyle}" />
+                            <TextBlock Style="{StaticResource AppleBodyStyle}" TextWrapping="Wrap"
+                                       Text="识别需要 whisper.cpp 的 ggml 模型（.bin）。本地已经有就点下面「识别模型文件夹」，程序会自动扫描该文件夹（含两层子目录）并把找到的模型填好；没有的话去设置页下载一个（推荐 ggml-small：中文可用、速度可接受）。" />
+
+                            <StackPanel Orientation="Horizontal" Spacing="12">
+                                <Button AutomationProperties.Name="引导识别模型文件夹"
+                                        Style="{StaticResource AppleSecondaryButtonStyle}"
+                                        VerticalAlignment="Center" Click="ObPickModelFolder_Click">
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <FontIcon Glyph="&#xE721;" FontSize="15"
+                                                  FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                  Foreground="{ThemeResource TextPrimary}" VerticalAlignment="Center" />
+                                        <TextBlock Text="识别模型文件夹" Foreground="{ThemeResource TextPrimary}" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </Button>
+                                <Button AutomationProperties.Name="引导去设置页下载模型"
+                                        Style="{StaticResource AppleTextLinkButtonStyle}"
+                                        VerticalAlignment="Center" Click="ObGoDownloadModel_Click">
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <FontIcon Glyph="&#xE896;" FontSize="15"
+                                                  FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                  Foreground="{ThemeResource Accent}" VerticalAlignment="Center" />
+                                        <TextBlock Text="去设置页下载模型" Foreground="{ThemeResource Accent}" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </Button>
+                            </StackPanel>
+
+                            <TextBlock x:Name="ObModelHint" Style="{StaticResource AppleCaptionStyle}" TextWrapping="Wrap" />
+                            <TextBlock x:Name="ObModelScanHint" Style="{StaticResource AppleCaptionStyle}" TextWrapping="Wrap"
+                                       Foreground="{ThemeResource Accent}" />
+                        </StackPanel>
+
+                        <!-- ④ 开始用 -->
+                        <StackPanel x:Name="OnboardingStep4" Spacing="14" Visibility="Collapsed">
+                            <TextBlock Text="第三步：扫描索引，开始用" Style="{StaticResource AppleCardTitleStyle}" />
+                            <TextBlock Style="{StaticResource AppleBodyStyle}" TextWrapping="Wrap"
+                                       Text="点「开始使用」会把你带到「概览」页：那里有「全量扫描索引」按钮，扫完就能在左侧分区导航里按 类型 / 场景 / 干员 / 活动 / 地图 浏览。" />
+                            <TextBlock Style="{StaticResource AppleBodyStyle}" TextWrapping="Wrap"
+                                       Text="要识别语音就点「开始识别（手动）」排队，进度在「识别队列」看；播放条上的两个滑块可以变速保持音调、变调保持速度。" />
+                            <TextBlock Style="{StaticResource AppleCaptionStyle}" TextWrapping="Wrap"
+                                       Text="左侧「新手教程」有更细的图文步骤；设置页底部显示数据目录，日志在里面的 logs 文件夹。" />
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+                <!-- 底部：上一步 / 下一步（或开始使用）/ 跳过 -->
+                <Grid Grid.Row="2" ColumnSpacing="12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <Button x:Name="ObSkipButton" Grid.Column="0" AutomationProperties.Name="跳过引导"
+                            Style="{StaticResource AppleTextLinkButtonStyle}" VerticalAlignment="Center"
+                            Click="ObSkip_Click">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <FontIcon Glyph="&#xE711;" FontSize="15"
+                                      FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                      Foreground="{ThemeResource Accent}" VerticalAlignment="Center" />
+                            <TextBlock Text="跳过引导" Foreground="{ThemeResource Accent}" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+
+                    <Button x:Name="ObBackButton" Grid.Column="2" AutomationProperties.Name="上一步"
+                            Style="{StaticResource AppleSecondaryButtonStyle}" VerticalAlignment="Center"
+                            Click="ObBack_Click">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <FontIcon Glyph="&#xE72B;" FontSize="15"
+                                      FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                      Foreground="{ThemeResource TextPrimary}" VerticalAlignment="Center" />
+                            <TextBlock Text="上一步" Foreground="{ThemeResource TextPrimary}" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+
+                    <Button x:Name="ObNextButton" Grid.Column="3" AutomationProperties.Name="下一步"
+                            Style="{StaticResource ApplePrimaryButtonStyle}" VerticalAlignment="Center"
+                            Click="ObNext_Click">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBlock x:Name="ObNextText" Text="下一步"
+                                       Foreground="{ThemeResource OnAccent}" VerticalAlignment="Center" />
+                            <FontIcon x:Name="ObNextIcon" Glyph="&#xE72A;" FontSize="15"
+                                      FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                      Foreground="{ThemeResource OnAccent}" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+                </Grid>
+            </Grid>
+        </Grid>
+    </Grid>
+</Window>

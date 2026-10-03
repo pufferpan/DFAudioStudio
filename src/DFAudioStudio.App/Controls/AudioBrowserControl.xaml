@@ -1,0 +1,584 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl
+    x:Class="DFAudioStudio.App.Controls.AudioBrowserControl"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:models="using:DFAudioStudio.Core.Models"
+    Background="Transparent"
+    mc:Ignorable="d">
+
+    <!--
+        浏览控件：左右分栏（原来是「列表在上 / 播放条 + 识别文本在下」的上下堆叠）。
+          · Row 0（Auto）= 顶部筛选条，横跨整宽：搜索 / 刷新 / 导出 CSV / 更多筛选 + 活动 / 排序下拉；
+          · Row 1（*   ）= 两列：
+              左列（Auto，MinWidth 380 / MaxWidth 420）= 播放器卡片（竖向排版：文件名 → 传输控制 → 进度 → 次级操作 → 错误位）
+                                                      + 识别文本卡片（占本列剩余高度，内部 TranscriptScroller 独立滚动）；
+              右列（*  ，MinWidth 420）        = 音频条目列表 ItemList（保留原行模板 / 选中 / 双击）+ 列表下方的状态行。
+        两侧各自滚动：列表是 ListView 自带滚动，识别文本是 TranscriptScroller。
+        删掉了原来控件内的标题与说明书式副标题（标题交给承载它的页面用 PageTitle 显示）。
+    -->
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- ══ 一、筛选：一行放得下的放这里，其余收进「更多筛选」 ══ -->
+        <Grid Grid.Row="0" Margin="56,0,56,24" RowSpacing="16">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <Grid Grid.Row="0" ColumnSpacing="16">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <TextBox x:Name="SearchBox" Grid.Column="0" Width="260" Height="36"
+                         VerticalAlignment="Center"
+                         Style="{StaticResource AppleSubtleTextBoxStyle}"
+                         PlaceholderText="搜索文件名 / 识别文本"
+                         Text="{x:Bind ViewModel.SearchText, Mode=TwoWay}" />
+
+                <Button AutomationProperties.Name="搜索" Grid.Column="1"
+                        Style="{StaticResource AppleSecondaryButtonStyle}"
+                        VerticalAlignment="Center" Click="Search_Click">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xE721;" FontSize="15"
+                                  FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                  Foreground="{ThemeResource TextPrimary}" VerticalAlignment="Center" />
+                        <TextBlock Text="搜索"
+                                   Foreground="{ThemeResource TextPrimary}" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
+
+                <Button AutomationProperties.Name="刷新" Grid.Column="2"
+                        Style="{StaticResource AppleTextLinkButtonStyle}"
+                        VerticalAlignment="Center" Click="Refresh_Click">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xE72C;" FontSize="15"
+                                  FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                  Foreground="{ThemeResource Accent}" VerticalAlignment="Center" />
+                        <TextBlock Text="刷新"
+                                   Foreground="{ThemeResource Accent}" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
+
+                <Button AutomationProperties.Name="导出 CSV" Grid.Column="3"
+                        Style="{StaticResource AppleTextLinkButtonStyle}"
+                        VerticalAlignment="Center" Click="ExportCsv_Click">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xE896;" FontSize="15"
+                                  FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                  Foreground="{ThemeResource Accent}" VerticalAlignment="Center" />
+                        <TextBlock Text="导出 CSV"
+                                   Foreground="{ThemeResource Accent}" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
+
+                <StackPanel Grid.Column="4" Orientation="Horizontal" Spacing="12"
+                            HorizontalAlignment="Right" VerticalAlignment="Center">
+                    <!-- 「导出 SRT」在左列播放器卡片的次级操作行（同一个 ExportSrt_Click），这里不再重复放一个 -->
+                    <ProgressRing Width="14" Height="14" VerticalAlignment="Center"
+                                  IsActive="{x:Bind ViewModel.IsBusy, Mode=OneWay}" />
+                </StackPanel>
+            </Grid>
+
+            <!-- 常用条件：分区 / 活动 / 排序（下拉高度统一 36，标签是上方 12px 小字） -->
+            <Grid Grid.Row="1" ColumnSpacing="16">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0" Spacing="4" VerticalAlignment="Center"
+                            Visibility="{x:Bind ViewModel.ShowCategorySelector, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
+                    <TextBlock Text="分区" Style="{StaticResource AppleCaptionStyle}" Margin="2,0,0,0" />
+                    <ComboBox x:Name="CategoryBox" MinWidth="150" Width="150" Height="36"
+                              Style="{StaticResource AppleSubtleComboBoxStyle}"
+                              ItemContainerStyle="{StaticResource AppleSubtleComboBoxItemStyle}"
+                              DisplayMemberPath="Label"
+                              ItemsSource="{x:Bind ViewModel.CategoryOptions, Mode=OneWay}"
+                              SelectedItem="{x:Bind ViewModel.SelectedCategory, Mode=TwoWay}"
+                              SelectionChanged="Filter_SelectionChanged" />
+                </StackPanel>
+
+                <StackPanel Grid.Column="1" Spacing="4" VerticalAlignment="Center">
+                    <TextBlock Text="活动" Style="{StaticResource AppleCaptionStyle}" Margin="2,0,0,0" />
+                    <ComboBox x:Name="EventBox" MinWidth="170" Width="170" Height="36"
+                              Style="{StaticResource AppleSubtleComboBoxStyle}"
+                              ItemContainerStyle="{StaticResource AppleSubtleComboBoxItemStyle}"
+                              ItemsSource="{x:Bind ViewModel.Events, Mode=OneWay}"
+                              SelectedItem="{x:Bind ViewModel.SelectedEvent, Mode=TwoWay}"
+                              SelectionChanged="Filter_SelectionChanged" />
+                </StackPanel>
+
+                <StackPanel Grid.Column="2" Spacing="4" VerticalAlignment="Center">
+                    <TextBlock Text="排序" Style="{StaticResource AppleCaptionStyle}" Margin="2,0,0,0" />
+                    <ComboBox x:Name="SortBox" MinWidth="150" Width="150" Height="36"
+                              Style="{StaticResource AppleSubtleComboBoxStyle}"
+                              ItemContainerStyle="{StaticResource AppleSubtleComboBoxItemStyle}"
+                              DisplayMemberPath="Label"
+                              ItemsSource="{x:Bind ViewModel.SortOptions, Mode=OneWay}"
+                              SelectedItem="{x:Bind ViewModel.SelectedSort, Mode=TwoWay}"
+                              SelectionChanged="Filter_SelectionChanged" />
+                </StackPanel>
+
+                <!-- 其余条件收进展开器：默认收起，不占一屏 -->
+                <Expander Grid.Column="3" HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                          Style="{StaticResource AppleExpanderStyle}"
+                          Header="更多筛选">
+                    <Grid ColumnSpacing="16" RowSpacing="12" Margin="0,12,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <StackPanel Grid.Row="0" Grid.Column="0" Spacing="4">
+                            <TextBlock Text="干员" Style="{StaticResource AppleCaptionStyle}" Margin="2,0,0,0" />
+                            <ComboBox x:Name="OperatorBox" MinWidth="150" Width="150" Height="36"
+                                      Style="{StaticResource AppleSubtleComboBoxStyle}"
+                                      ItemContainerStyle="{StaticResource AppleSubtleComboBoxItemStyle}"
+                                      ItemsSource="{x:Bind ViewModel.Operators, Mode=OneWay}"
+                                      SelectedItem="{x:Bind ViewModel.SelectedOperator, Mode=TwoWay}"
+                                      SelectionChanged="Filter_SelectionChanged" />
+                        </StackPanel>
+
+                        <StackPanel Grid.Row="0" Grid.Column="1" Spacing="4">
+                            <TextBlock Text="地图" Style="{StaticResource AppleCaptionStyle}" Margin="2,0,0,0" />
+                            <ComboBox x:Name="MapBox" MinWidth="180" Width="180" Height="36"
+                                      Style="{StaticResource AppleSubtleComboBoxStyle}"
+                                      ItemContainerStyle="{StaticResource AppleSubtleComboBoxItemStyle}"
+                                      ItemsSource="{x:Bind ViewModel.Maps, Mode=OneWay}"
+                                      SelectedItem="{x:Bind ViewModel.SelectedMap, Mode=TwoWay}"
+                                      SelectionChanged="Filter_SelectionChanged" />
+                        </StackPanel>
+
+                        <StackPanel Grid.Row="1" Grid.Column="0" Spacing="4">
+                            <TextBlock Text="子分类" Style="{StaticResource AppleCaptionStyle}" Margin="2,0,0,0" />
+                            <ComboBox x:Name="SubCategoryBox" MinWidth="200" Width="200" Height="36"
+                                      Style="{StaticResource AppleSubtleComboBoxStyle}"
+                                      ItemContainerStyle="{StaticResource AppleSubtleComboBoxItemStyle}"
+                                      DisplayMemberPath="Label"
+                                      ItemsSource="{x:Bind ViewModel.SubCategories, Mode=OneWay}"
+                                      SelectedItem="{x:Bind ViewModel.SelectedSubCategory, Mode=TwoWay}"
+                                      SelectionChanged="Filter_SelectionChanged" />
+                        </StackPanel>
+
+                        <StackPanel Grid.Row="1" Grid.Column="1" Spacing="4">
+                            <TextBlock Text="皮肤 / 联动" Style="{StaticResource AppleCaptionStyle}" Margin="2,0,0,0" />
+                            <ComboBox x:Name="SkinBox" MinWidth="200" Width="200" Height="36"
+                                      Style="{StaticResource AppleSubtleComboBoxStyle}"
+                                      ItemContainerStyle="{StaticResource AppleSubtleComboBoxItemStyle}"
+                                      DisplayMemberPath="Label"
+                                      ItemsSource="{x:Bind ViewModel.Skins, Mode=OneWay}"
+                                      SelectedItem="{x:Bind ViewModel.SelectedSkin, Mode=TwoWay}"
+                                      SelectionChanged="Filter_SelectionChanged" />
+                        </StackPanel>
+
+                        <StackPanel Grid.Row="2" Grid.Column="0" Spacing="4">
+                            <TextBlock Text="识别状态" Style="{StaticResource AppleCaptionStyle}" Margin="2,0,0,0" />
+                            <ComboBox x:Name="StatusBox" MinWidth="150" Width="150" Height="36"
+                                      Style="{StaticResource AppleSubtleComboBoxStyle}"
+                                      ItemContainerStyle="{StaticResource AppleSubtleComboBoxItemStyle}"
+                                      DisplayMemberPath="Label"
+                                      ItemsSource="{x:Bind ViewModel.StatusOptions, Mode=OneWay}"
+                                      SelectedItem="{x:Bind ViewModel.SelectedStatus, Mode=TwoWay}"
+                                      SelectionChanged="Filter_SelectionChanged" />
+                        </StackPanel>
+                    </Grid>
+                </Expander>
+            </Grid>
+        </Grid>
+
+        <!--
+            ══ 二、两列主体 ══
+            左列 Auto + 内部 MinWidth 380 / MaxWidth 420：内容再宽也只会停在 420（窄窗口不会把右列挤没）；
+            右列 * + MinWidth 420：空间不够时列表优先保持可用（左列先被压到 380 以下由 MinWidth 兜住）。
+        -->
+        <Grid Grid.Row="1" Margin="56,0,56,48" ColumnSpacing="20">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <!-- ── 左列：播放器卡片（上）+ 识别文本卡片（下，占剩余高度） ── -->
+            <Grid Grid.Column="0"
+                  MinWidth="380" MaxWidth="420"
+                  VerticalAlignment="Stretch">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <!--
+                    播放器卡片（原「列表下方的整条卡片」，现在竖着排进 420 宽的左列）：
+                      ① 文件名（17 SemiBold 单行省略）+ 元信息行（分区 · 场景 · 时长 · 大小）；
+                      ② 传输控制：上一首 / 44×44 主播放键 / 下一首（居中）；
+                      ③ 进度：当前时间（等宽小字） + 4px 进度条 + 总时长；
+                      ④ 次级操作：音量（喇叭 / 静音 + 100px 滑块）、播放速度、重新识别、导出 SRT、打开文件位置（分两行，避免溢出 420）；
+                      ⑤ 失败提示位 PlayerErrorText。
+                    播放状态相关的图标 / 文本（按钮 ▶⏸、时间码、进度）全部由 code-behind 赋值：
+                    这些都不是绑定数据，而且 WinUI 在 Window 根上不支持 x:Bind 到元素属性，统一走代码最稳。
+                -->
+                <Border Grid.Row="0" Style="{StaticResource ApplePlayerBarCardStyle}">
+                    <Grid RowSpacing="10">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <!-- ① 当前音频 -->
+                        <StackPanel Grid.Row="0" Spacing="4">
+                            <TextBlock Text="{x:Bind ViewModel.SelectedTitle, Mode=OneWay}"
+                                       FontSize="17" FontWeight="SemiBold"
+                                       Foreground="{ThemeResource TextPrimary}"
+                                       TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" MaxLines="1" />
+                            <TextBlock Text="{x:Bind ViewModel.SelectedPlayerMeta, Mode=OneWay}"
+                                       Style="{StaticResource AppleMetaStyle}" MaxLines="1" />
+                        </StackPanel>
+
+                        <!-- ② 传输控制：⏮ 上一首 / 主播放键 44×44（图标由代码写）/ ⏭ 下一首；窄列里用图标按钮 + ToolTip -->
+                        <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="16"
+                                    HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <Button x:Name="PrevButton" AutomationProperties.Name="上一首"
+                                    Style="{StaticResource ApplePaneIconButtonStyle}"
+                                    VerticalAlignment="Center"
+                                    ToolTipService.ToolTip="上一首（按列表顺序）"
+                                    Click="Prev_Click">
+                                <FontIcon Glyph="&#xE892;" FontSize="18"
+                                          FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                          Foreground="{ThemeResource TextPrimary}" />
+                            </Button>
+
+                            <!-- 图标（▶ E768 / ⏸ E769）由 UpdatePlayButton 写；这里刻意不预设 Content，避免开屏闪一下文字 -->
+                            <Button x:Name="PlayPauseButton" AutomationProperties.Name="播放"
+                                    Style="{StaticResource AppleCircleButtonStyle}"
+                                    Width="44" Height="44" MinWidth="44" MinHeight="44"
+                                    VerticalAlignment="Center"
+                                    Click="PlayPause_Click" />
+
+                            <Button x:Name="NextButton" AutomationProperties.Name="下一首"
+                                    Style="{StaticResource ApplePaneIconButtonStyle}"
+                                    VerticalAlignment="Center"
+                                    ToolTipService.ToolTip="下一首（按列表顺序）"
+                                    Click="Next_Click">
+                                <FontIcon Glyph="&#xE893;" FontSize="18"
+                                          FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                          Foreground="{ThemeResource TextPrimary}" />
+                            </Button>
+                        </StackPanel>
+
+                        <!-- ③ 进度：当前时间 + 进度条（滑轨 4px、占满可用宽度）+ 总时长（等宽小字） -->
+                        <Grid Grid.Row="2" ColumnSpacing="10" HorizontalAlignment="Stretch">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock x:Name="PositionText" Grid.Column="0" Text="0:00"
+                                       AutomationProperties.Name="当前时间"
+                                       Style="{StaticResource AppleTimeTextStyle}" />
+
+                            <!--
+                                拖动：PointerPressed → _scrubbing=true，期间 250ms 定时器**不回写** Slider.Value
+                                （否则手还在拖就被拉回去）；松手（Released / CaptureLost / Canceled）后按真实位置同步一次。
+                                Maximum 只在 NaturalDuration > 0 时才写（Maximum=0 会让 Slider 完全拖不动）。
+                            -->
+                            <Slider x:Name="ProgressSlider" Grid.Column="1"
+                                    Style="{StaticResource AppleSeekSliderStyle}"
+                                    Minimum="0" Maximum="1" Value="0"
+                                    StepFrequency="0.1"
+                                    AutomationProperties.Name="播放进度"
+                                    ValueChanged="ProgressSlider_ValueChanged"
+                                    PointerPressed="ProgressSlider_PointerPressed"
+                                    PointerReleased="ProgressSlider_PointerReleased"
+                                    PointerCanceled="ProgressSlider_PointerCanceled"
+                                    PointerCaptureLost="ProgressSlider_PointerCaptureLost" />
+
+                            <TextBlock x:Name="TotalTimeText" Grid.Column="2" Text="0:00"
+                                       AutomationProperties.Name="总时长"
+                                       Style="{StaticResource AppleTimeTextStyle}" />
+                        </Grid>
+
+                        <!-- ④ 次级操作：音量 + 变速 / 变调一行；重新识别 / 导出 SRT / 打开文件位置一行（紧凑内边距，420 宽也不溢出） -->
+                        <Grid Grid.Row="3" RowSpacing="6">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+
+                            <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="10"
+                                        HorizontalAlignment="Center" VerticalAlignment="Center">
+                                <!-- 音量：喇叭 E767 / 静音 E74F + 100px 滑块（作用于 _player.Volume） -->
+                                <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                    <Button x:Name="MuteButton" AutomationProperties.Name="音量"
+                                            Style="{StaticResource ApplePaneIconButtonStyle}"
+                                            VerticalAlignment="Center"
+                                            ToolTipService.ToolTip="静音 / 取消静音"
+                                            Click="Mute_Click">
+                                        <FontIcon x:Name="VolumeIcon" Glyph="&#xE767;" FontSize="16"
+                                                  FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                  Foreground="{ThemeResource TextPrimary}" />
+                                    </Button>
+
+                                    <Slider x:Name="VolumeSlider" Width="100"
+                                            Style="{StaticResource AppleSeekSliderStyle}"
+                                            Minimum="0" Maximum="1" StepFrequency="0.05" Value="1"
+                                            AutomationProperties.Name="音量"
+                                            ValueChanged="VolumeSlider_ValueChanged" />
+                                </StackPanel>
+                            </StackPanel>
+
+                            <!--
+                                变速 / 变调（无损）：走 SoundTouch 实时 DSP —— 变速用 Tempo（保持音调）、
+                                变调用 PitchSemiTones（保持速度）。两个值都是中性（1.00× / 0 半音）时用系统
+                                MediaPlayer 播；只要有一个不是中性，就自动切到 DSP 引擎并从当前位置接着放，
+                                回到中性再交还给系统播放器。系统播放器的倍速会连带变调，所以不用它做变速。
+                            -->
+                            <Grid Grid.Row="1" ColumnSpacing="14" HorizontalAlignment="Stretch">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+
+                                <StackPanel Grid.Column="0" Spacing="2">
+                                    <Grid>
+                                        <TextBlock Text="变速（保持音调）" FontSize="11"
+                                                   Foreground="{ThemeResource TextSecondary}" />
+                                        <TextBlock x:Name="SpeedValueText" Text="1.00×" FontSize="11"
+                                                   HorizontalAlignment="Right"
+                                                   AutomationProperties.Name="变速读数"
+                                                   Foreground="{ThemeResource TextSecondary}" />
+                                    </Grid>
+                                    <Slider x:Name="SpeedSlider" Minimum="0.5" Maximum="2" Value="1"
+                                            StepFrequency="0.05"
+                                            AutomationProperties.Name="变速滑块"
+                                            ToolTipService.ToolTip="变速但音调不变（0.5× ~ 2×）"
+                                            ValueChanged="SpeedSlider_ValueChanged" />
+                                </StackPanel>
+
+                                <StackPanel Grid.Column="1" Spacing="2">
+                                    <Grid>
+                                        <TextBlock Text="变调（保持速度）" FontSize="11"
+                                                   Foreground="{ThemeResource TextSecondary}" />
+                                        <TextBlock x:Name="PitchValueText" Text="+0 半音" FontSize="11"
+                                                   HorizontalAlignment="Right"
+                                                   AutomationProperties.Name="变调读数"
+                                                   Foreground="{ThemeResource TextSecondary}" />
+                                    </Grid>
+                                    <Slider x:Name="PitchSlider" Minimum="-12" Maximum="12" Value="0"
+                                            StepFrequency="1"
+                                            AutomationProperties.Name="变调滑块"
+                                            ToolTipService.ToolTip="变调但速度不变（-12 ~ +12 半音）"
+                                            ValueChanged="PitchSlider_ValueChanged" />
+                                </StackPanel>
+                            </Grid>
+
+                            <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="2"
+                                        HorizontalAlignment="Center" VerticalAlignment="Center">
+                                <!--
+                                    重新识别：只要列表里有选中项就可用（IsEnabled ← ViewModel.HasSelection）。
+                                    没有选中项时置灰，并给出「先选中一条音频」的提示；点击后由
+                                    BrowserViewModel.ReTranscribeSelectedAsync 重置状态、清空旧文本、必要时启动队列。
+                                -->
+                                <Button x:Name="RedoButton" AutomationProperties.Name="重新识别"
+                                        Style="{StaticResource AppleTextLinkButtonStyle}"
+                                        Padding="6,6"
+                                        VerticalAlignment="Center"
+                                        IsEnabled="{x:Bind ViewModel.HasSelection, Mode=OneWay}"
+                                        ToolTipService.ToolTip="先选中一条音频"
+                                        Click="Redo_Click">
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <FontIcon Glyph="&#xE72D;" FontSize="15"
+                                                  FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                  Foreground="{ThemeResource Accent}" VerticalAlignment="Center" />
+                                        <TextBlock Text="重新识别"
+                                                   Foreground="{ThemeResource Accent}" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </Button>
+
+                                <Button AutomationProperties.Name="导出 SRT"
+                                        Style="{StaticResource AppleTextLinkButtonStyle}"
+                                        Padding="6,6"
+                                        VerticalAlignment="Center"
+                                        ToolTipService.ToolTip="导出选中音频的字幕"
+                                        Click="ExportSrt_Click">
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <FontIcon Glyph="&#xE896;" FontSize="15"
+                                                  FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                  Foreground="{ThemeResource Accent}" VerticalAlignment="Center" />
+                                        <TextBlock Text="导出 SRT"
+                                                   Foreground="{ThemeResource Accent}" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </Button>
+
+                                <Button x:Name="RevealButton" AutomationProperties.Name="打开文件位置"
+                                        Style="{StaticResource AppleTextLinkButtonStyle}"
+                                        Padding="6,6"
+                                        VerticalAlignment="Center"
+                                        ToolTipService.ToolTip="在资源管理器中定位该文件"
+                                        Click="Reveal_Click">
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <FontIcon Glyph="&#xE8B7;" FontSize="15"
+                                                  FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                  Foreground="{ThemeResource Accent}" VerticalAlignment="Center" />
+                                        <TextBlock Text="打开文件位置"
+                                                   Foreground="{ThemeResource Accent}" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </Button>
+                            </StackPanel>
+                        </Grid>
+
+                        <!--
+                            可见的失败提示位（在左列卡片底部）：默认收起，不占高度。
+                            失败原因、以及「英文路径副本隔离验证」的结论都显示在这里 —— 不允许只写日志。
+                            文字可选中，方便把 HRESULT 复制出来。
+                        -->
+                        <TextBlock x:Name="PlayerErrorText"
+                                   Grid.Row="4"
+                                   Visibility="Collapsed"
+                                   Style="{StaticResource AppleCaptionStyle}"
+                                   Foreground="{ThemeResource Danger}"
+                                   IsTextSelectionEnabled="True"
+                                   TextWrapping="Wrap" MaxLines="2" />
+                    </Grid>
+                </Border>
+
+                <!-- 识别文本：左列下半，占本列剩余高度；内部 TranscriptScroller 独立滚动（Body 17 / 行高 1.6 / TextSecondary、可选中复制） -->
+                <Border Grid.Row="1" Margin="0,20,0,0"
+                        MinHeight="150"
+                        Padding="20,14"
+                        Style="{StaticResource AppleCardBorderStyle}">
+                    <Grid RowSpacing="10">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0" Text="识别文本" Style="{StaticResource AppleCaptionStyle}" />
+
+                        <ScrollViewer x:Name="TranscriptScroller" Grid.Row="1"
+                                      HorizontalScrollBarVisibility="Disabled" HorizontalScrollMode="Disabled"
+                                      VerticalScrollBarVisibility="Auto" VerticalScrollMode="Enabled">
+                            <StackPanel Spacing="8" HorizontalAlignment="Stretch">
+                                <TextBlock x:Name="TranscriptText"
+                                           Text="{x:Bind ViewModel.SelectedTranscript, Mode=OneWay}"
+                                           Style="{StaticResource AppleReadingStyle}" />
+
+                                <!-- 选了某一条、但这一条还没有文本 -->
+                                <StackPanel Visibility="{x:Bind ViewModel.HasSelection, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
+                                    <TextBlock Text="这一条还没有识别文本"
+                                               Style="{StaticResource AppleCaptionStyle}"
+                                               Visibility="{x:Bind ViewModel.HasSelectedTranscript, Mode=OneWay, Converter={StaticResource BoolToVisibility}, ConverterParameter=invert}" />
+                                </StackPanel>
+
+                                <!-- 什么都没选：给一句去哪点哪的提示 -->
+                                <TextBlock Text="在上方列表里点一条音频，这里会显示识别出的文字"
+                                           Style="{StaticResource AppleCaptionStyle}"
+                                           Visibility="{x:Bind ViewModel.HasSelection, Mode=OneWay, Converter={StaticResource BoolToVisibility}, ConverterParameter=invert}" />
+                            </StackPanel>
+                        </ScrollViewer>
+                    </Grid>
+                </Border>
+            </Grid>
+
+            <!-- ── 右列：音频条目列表（*，独立滚动）+ 列表下方状态行 ── -->
+            <Grid Grid.Column="1" MinWidth="420" VerticalAlignment="Stretch" RowSpacing="8">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <Grid Grid.Row="0">
+                    <!-- 列表：行样式统一 AppleAudioRowStyle（无分隔线）。x:Name / 事件 / 行模板与原实现一致 -->
+                    <ListView x:Name="ItemList"
+                              Background="Transparent"
+                              ItemsSource="{x:Bind ViewModel.Items, Mode=OneWay}"
+                              ItemContainerStyle="{StaticResource AppleAudioRowStyle}"
+                              SelectionMode="Single"
+                              IsItemClickEnabled="True"
+                              SelectionChanged="ItemList_SelectionChanged"
+                              ItemClick="ItemList_ItemClick"
+                              DoubleTapped="ItemList_DoubleTapped">
+                        <ListView.ItemTemplate>
+                            <DataTemplate x:DataType="models:AudioItem">
+                                <Grid ColumnSpacing="16">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+
+                                    <!-- 左：文件名（单行省略）+ 一行最有信息量的标签 -->
+                                    <StackPanel Grid.Column="0" Spacing="4">
+                                        <TextBlock Text="{x:Bind FileName}"
+                                                   FontSize="17" FontWeight="Normal"
+                                                   Foreground="{ThemeResource TextPrimary}"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   TextWrapping="NoWrap" />
+
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <TextBlock Style="{StaticResource AppleMetaStyle}"
+                                                       Text="{x:Bind Category, Converter={StaticResource CategoryToText}}" />
+                                            <TextBlock Style="{StaticResource AppleMetaStyle}" Text="·" />
+                                            <TextBlock Style="{StaticResource AppleMetaStyle}" MaxWidth="220"
+                                                       Text="{x:Bind SceneTag}" />
+                                            <TextBlock Style="{StaticResource AppleMetaStyle}" Text="·" />
+                                            <TextBlock Style="{StaticResource AppleMetaStyle}"
+                                                       Text="{x:Bind DurationText}" />
+                                        </StackPanel>
+
+                                        <!-- 有识别文本时补一行预览（没有就整行收起，不留空行） -->
+                                        <TextBlock Style="{StaticResource AppleCaptionStyle}"
+                                                   Margin="0,2,0,0"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   MaxLines="1"
+                                                   Visibility="{x:Bind Transcript, Converter={StaticResource BoolToVisibility}}"
+                                                   Text="{x:Bind Transcript, Converter={StaticResource TranscriptPreview}}" />
+                                    </StackPanel>
+
+                                    <!-- 右：识别状态 -->
+                                    <TextBlock Grid.Column="1"
+                                               Style="{StaticResource AppleCaptionStyle}"
+                                               VerticalAlignment="Center"
+                                               Text="{x:Bind Status, Converter={StaticResource StatusToText}}" />
+                                </Grid>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+
+                    <TextBlock Text="没有匹配的音频"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               Style="{StaticResource AppleSecondaryStyle}"
+                               Visibility="{x:Bind ViewModel.IsEmpty, Mode=OneWay, Converter={StaticResource BoolToVisibility}}" />
+                </Grid>
+
+                <!-- 唯一的提示行：只在有实际信息（读取中 / 导出结果 / 播放失败）时出现 -->
+                <TextBlock x:Name="StatusText" Grid.Row="1"
+                           MinHeight="18"
+                           MaxLines="1" TextTrimming="CharacterEllipsis"
+                           Style="{StaticResource AppleCaptionStyle}"
+                           Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" />
+            </Grid>
+        </Grid>
+    </Grid>
+</UserControl>

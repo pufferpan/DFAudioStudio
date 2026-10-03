@@ -1,0 +1,8 @@
+# 统一按平台处理换行：源码入库用 LF，Windows 批处理保持 CRLF
+* text=auto
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+*.png binary
+*.ico binary
+*.jar binary

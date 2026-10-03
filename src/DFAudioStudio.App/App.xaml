@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Application
+    x:Class="DFAudioStudio.App.App"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:converters="using:DFAudioStudio.App.Converters">
+
+    <!--
+        这里**刻意不设置** RequestedTheme：应用默认跟随系统主题（原来钉死 Light，会导致无法切暗色）。
+        实际主题由主窗口根元素负责 —— MainWindow 的 RootGrid.RequestedTheme 由 ThemeService 设置
+        （System → ElementTheme.Default，Light → Light，Dark → Dark），切换时带一次淡入淡出动画。
+        颜色令牌全部在 Styles/AppleTheme.xaml 的 ThemeDictionaries（Light / Dark）里，页面用 {ThemeResource} 引用。
+    -->
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
+                <!-- 全部设计令牌与控件样式都在这里（颜色 / 字号 / 圆角 / 间距 / NavView 覆盖） -->
+                <ResourceDictionary Source="ms-appx:///Styles/AppleTheme.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+
+            <!-- 全局转换器（页面与控件里都用 StaticResource 引用） -->
+            <converters:BoolToVisibilityConverter x:Key="BoolToVisibility" />
+            <converters:BoolToVisibilityConverter x:Key="InverseBoolToVisibility" Invert="True" />
+            <converters:InverseBoolConverter x:Key="InverseBool" />
+            <converters:CategoryToTextConverter x:Key="CategoryToText" />
+            <converters:StatusToTextConverter x:Key="StatusToText" />
+            <!-- 失败项行内「重试」按钮的可用性：只有「未处理 / 失败」才放行（无该项时禁用） -->
+            <converters:RetryableStatusConverter x:Key="RetryableStatus" />
+            <converters:BytesToTextConverter x:Key="BytesToText" />
+            <converters:CountToTextConverter x:Key="CountToText" />
+            <converters:TranscriptPreviewConverter x:Key="TranscriptPreview" />
+            <converters:TagTextConverter x:Key="TagText" />
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>

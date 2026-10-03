@@ -1,0 +1,52 @@
+# ── 构建产物 ─────────────────────────────────────────────
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+[Aa]lpha/
+publish/
+*.user
+*.suo
+.vs/
+# ── 安装包与打包暂存（成品放 GitHub Releases，不进仓库）──
+installer/app/
+installer/AlphaApp/
+installer/App/
+*.exe
+*.msi
+*.7z
+*.zip
+*.apk
+*.aab
+# ── 运行时数据 / 大文件（模型、音频、视频、索引库）────────
+data/
+logs/
+artifacts/
+models/
+tools/whisper-model/
+tools/ffmpeg.exe
+*.pt
+*.bin
+*.db
+*.gguf
+*.bk2
+*.bik
+*.mp4
+*.wav
+# ── 游戏素材 / 导出的数据（版权归原厂商，不公开）────────
+installer/Data/
+Data/StringTables/
+# ── 密钥与本地配置 ───────────────────────────────────────
+keystore/
+*.jks
+*.keystore
+keystore.properties
+local.properties
+signing.properties
+# ── 编辑器 / 系统 ────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+desktop.ini
+新建文本文档.txt
