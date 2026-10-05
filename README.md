@@ -1,6 +1,6 @@
 # 三角洲音频工坊 · DFAudioStudio
 
-把《三角洲行动》Wwise 音频导出（`WwiseAudio\Media` + `WwiseAudio\Localized`，约 **7.6 万条 / 16GB**）
+（`WwiseAudio\Media` + `WwiseAudio\Localized`，约 **7.6 万条 / 16GB**）
 全量分类入库，按分区浏览试听，并用**离线 Whisper** 把语音转成中文文本，结果可导出。
 
 ---
